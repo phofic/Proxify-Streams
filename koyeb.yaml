@@ -1,0 +1,28 @@
+# Koyeb Configuration
+# This file configures your app for deployment on Koyeb
+
+services:
+  - name: proxify-streams
+    type: web
+    build:
+      type: docker
+      dockerfile: ./Dockerfile
+    ports:
+      - 5555:http
+    routes:
+      - path: /
+    health:
+      path: /
+      port: 5555
+      interval: 30s
+      timeout: 5s
+      grace: 60s
+    env:
+      - PYTHONUNBUFFERED=1
+    regions:
+      - fra
+      - sin
+      - iad
+    scale:
+      min: 1
+      max: 1
