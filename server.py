@@ -3,6 +3,7 @@ import os
 import json
 from urllib.parse import quote, unquote, urljoin, urlencode
 import urllib.request
+import ssl
 from flask import Flask, jsonify, request, send_from_directory, Response, make_response
 from werkzeug.routing import BaseConverter
 
@@ -36,17 +37,26 @@ class ProxyGenerator:
         return f"https://proxy.anikuro.to/{b64}{ext}"
 
     def lunaranime(self, url, referer):
-        from urllib.parse import quote
         return f"https://cluster.lunaranime.ru/api/proxy/hls/custom?url={quote(url, safe=':/')}&referer={quote(referer, safe=':/')}"
 
     def animanga(self, url, referer):
-        from urllib.parse import quote
-        import json
         headers = json.dumps({"Referer": referer})
         return f"https://upcloud.animanga.fun/proxy?url={quote(url, safe=':/')}&headers={quote(headers, safe=':/')}"
 
 generator = ProxyGenerator()
 
+# 🟢 FIXED: Preserves spoofed headers (Referer, User-Agent) across all redirects natively
+class SmartRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        new_req = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if new_req:
+            for key, val in req.headers.items():
+                new_req.add_header(key, val)
+        return new_req
+
+# Initialize the secure network opener pipeline context
+ssl_context = ssl._create_unverified_context()
+opener = urllib.request.build_opener(SmartRedirectHandler(), urllib.request.HTTPSHandler(context=ssl_context))
 
 @app.route('/')
 def docs():
@@ -61,17 +71,17 @@ def proxy_m3u8():
         return jsonify({"error": "Missing parameters"}), 400
 
     spoof_headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Referer": referer,
         "Origin": referer.rstrip('/')
     }
 
     try:
         req = urllib.request.Request(url, headers=spoof_headers)
-        with urllib.request.urlopen(req, timeout=10) as response:
+        # 🟢 FIXED: Use our custom redirect-aware opener loop
+        with opener.open(req, timeout=15) as response:
             html_content = response.read().decode('utf-8')
 
-        # Bulletproof parent boundary extraction
         if '/' in url:
             base_url = url.rsplit('/', 1)[0] + '/'
         else:
@@ -116,14 +126,15 @@ def proxy_segment():
         return jsonify({"error": "Missing parameters"}), 400
 
     spoof_headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Referer": referer,
         "Origin": referer.rstrip('/')
     }
 
     try:
         req = urllib.request.Request(url, headers=spoof_headers)
-        with urllib.request.urlopen(req, timeout=30) as response:
+        # 🟢 FIXED: Use our custom redirect-aware opener loop
+        with opener.open(req, timeout=30) as response:
             binary_content = response.read()
 
         content_type = "video/mp2t"
@@ -176,3 +187,5 @@ def get_proxy(data=None):
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5555))
     app.run(host='0.0.0.0', port=port, debug=False)
+
+app = app
