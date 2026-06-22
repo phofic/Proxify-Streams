@@ -2,10 +2,7 @@ import base64
 import os
 import json
 from urllib.parse import quote, unquote, urljoin, urlencode
-import urllib.request
-import ssl
-import traceback  # 🟢 Added for advanced error debugging
-from flask import Flask, jsonify, request, send_from_directory, Response, make_response
+from flask import Flask, jsonify, request, send_from_directory, make_response
 from werkzeug.routing import BaseConverter
 
 class EverythingConverter(BaseConverter):
@@ -30,12 +27,14 @@ class ProxyGenerator:
             b = text.encode('utf-8')
             c = bytes([b[i] ^ self.miruro_key[i % 16] for i in range(len(b))])
             return base64.urlsafe_b64encode(c).decode('utf-8').rstrip('=')
-        return f"https://ultracloud.cc{encode_param(url)}&r={encode_param(referer)}"
+        # 🟢 RESTORED DOCS ALGORITHM: Points safely to UltraCloud, not your server
+        return f"https://pro.ultracloud.cc/m3u8/?u={encode_param(url)}&r={encode_param(referer)}"
 
     def anikuro(self, url, referer):
         b64 = base64.b64encode(f"{url}|{referer}".encode()).decode()
         ext = ".m3u8" if ".m3u8" in url.lower() else ".mp4"
-        return f"https://anikuro.to{b64}{ext}"
+        # 🟢 RESTORED DOCS ALGORITHM: Points to correct proxy subdomain mapping path
+        return f"https://proxy.anikuro.to/{b64}{ext}"
 
     def lunaranime(self, url, referer):
         return f"https://lunaranime.ru{quote(url, safe=':/')}&referer={quote(referer, safe=':/')}"
@@ -46,125 +45,9 @@ class ProxyGenerator:
 
 generator = ProxyGenerator()
 
-class SmartRedirectHandler(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        new_req = super().redirect_request(req, fp, code, msg, headers, newurl)
-        if new_req:
-            for key, val in req.headers.items():
-                new_req.add_header(key, val)
-        return new_req
-
-ssl_context = ssl._create_unverified_context()
-opener = urllib.request.build_opener(SmartRedirectHandler(), urllib.request.HTTPSHandler(context=ssl_context))
-
 @app.route('/')
 def docs():
     return send_from_directory(os.path.dirname(os.path.abspath(__file__)), 'index.html')
-
-@app.route('/proxy_m3u8')
-def proxy_m3u8():
-    url = request.args.get('url')
-    referer = request.args.get('referer')
-    if not url or not referer:
-        return jsonify({"error": "Missing parameters"}), 400
-
-    # 🟢 FIXED: "Accept-Encoding": "identity" forces plain text and prevents hidden GZIP compression crashes
-    spoof_headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Referer": referer,
-        "Origin": referer.rstrip('/'),
-        "Accept-Encoding": "identity",
-        "Accept": "*/*"
-    }
-
-    try:
-        req = urllib.request.Request(url, headers=spoof_headers)
-        with opener.open(req, timeout=12) as response:
-            # Handle upstream status safely before decoding
-            if response.status != 200:
-                return jsonify({"error": f"Upstream CDN returned status {response.status}", "url": url}), 502
-                
-            raw_data = response.read()
-
-        # 🟢 FIXED: Defensive multi-encoding decoder layer avoids UnicodeDecodeError crashes
-        try:
-            html_content = raw_data.decode('utf-8', errors='replace')
-        except Exception:
-            html_content = raw_data.decode('latin-1', errors='replace')
-
-        # Extract parent path directory
-        if '/' in url:
-            base_url = url[:url.rfind('/') + 1]
-        else:
-            base_url = url + '/'
-
-        rewritten_lines = []
-
-        for line in html_content.splitlines():
-            clean_line = line.strip()
-            if clean_line and not clean_line.startswith("#"):
-                abs_url = urljoin(base_url, clean_line) if not clean_line.startswith("http") else clean_line
-                params = {"url": abs_url, "referer": referer}
-
-                if '.m3u8' in clean_line:
-                    rewritten_lines.append(f"/proxy_m3u8?{urlencode(params)}")
-                else:
-                    rewritten_lines.append(f"/proxy_segment?{urlencode(params)}")
-            elif 'URI="' in line:
-                try:
-                    before_uri, rest = line.split('URI="', 1)
-                    key_url, after_uri = rest.split('"', 1)
-
-                    abs_key_url = urljoin(base_url, key_url) if not key_url.startswith("http") else key_url
-                    proxied_key = f"/proxy_segment?{urlencode({'url': abs_key_url, 'referer': referer})}"
-
-                    rewritten_lines.append(f'{before_uri}URI="{proxied_key}"{after_uri}')
-                except Exception:
-                    rewritten_lines.append(line)
-            else:
-                rewritten_lines.append(line)
-
-        return Response("\n".join(rewritten_lines), mimetype="application/vnd.apple.mpegurl")
-        
-    except Exception as e:
-        # 🟢 FIXED: Logs the precise traceback to your Vercel Dashboard for fast diagnosis
-        print(f"[CRASH REPORT] Exception in proxy_m3u8: {str(e)}")
-        return jsonify({
-            "error": str(e),
-            "traceback": traceback.format_exc(),
-            "failed_target_url": url
-        }), 500
-
-
-@app.route('/proxy_segment')
-def proxy_segment():
-    url = request.args.get('url')
-    referer = request.args.get('referer')
-    if not url or not referer:
-        return jsonify({"error": "Missing parameters"}), 400
-
-    spoof_headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Referer": referer,
-        "Origin": referer.rstrip('/'),
-        "Accept": "*/*"
-    }
-
-    try:
-        req = urllib.request.Request(url, headers=spoof_headers)
-        with opener.open(req, timeout=30) as response:
-            binary_content = response.read()
-
-        content_type = "video/mp2t"
-        if ".key" in url or "mon.key" in url:
-            content_type = "application/pgp-keys"
-        elif url.endswith(".jpg") or ".jpg" in url:
-            content_type = "video/mp2t"
-
-        return Response(binary_content, mimetype=content_type, status=200)
-    except Exception as e:
-        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
-
 
 @app.route('/proxy/<everything:data>', methods=['GET', 'OPTIONS'])
 @app.route('/proxy', methods=['GET', 'OPTIONS'])
@@ -188,19 +71,18 @@ def get_proxy(data=None):
             return jsonify({"error": "Invalid format (expected url|referer)", "received": data}), 400
 
         url, referer = data.rsplit("|", 1)
-        native_rewrite_m3u8 = f"https://proxify-streams-theta.vercel.app/proxy_m3u8?{urlencode({'url': url, 'referer': referer})}"
 
+        # 🟢 FIXED: Removed the broken native_rewrite_m3u8 override wrapper loop completely!
         return jsonify({
             "proxifiedSource": {
-                "miruro": native_rewrite_m3u8,
-                "anikuro": generator.anikuro(url, referer),
+                "miruro": generator.miruro(url, referer),      # Uses the real UltraCloud proxy network
+                "anikuro": generator.anikuro(url, referer),    # Uses Anikuro's specialized infrastructure
                 "lunaranime": generator.lunaranime(url, referer),
                 "animanga": generator.animanga(url, referer)
             }
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5555))
