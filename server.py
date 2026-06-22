@@ -1,7 +1,7 @@
 import base64
 import os
 import json
-from urllib.parse import quote, unquote, urljoin, urlencode
+from urllib.parse import quote, unquote, urljoin, urlencode, urlparse
 import urllib.request
 from flask import Flask, jsonify, request, send_from_directory, Response, make_response
 from werkzeug.routing import BaseConverter
@@ -28,19 +28,19 @@ class ProxyGenerator:
             b = text.encode('utf-8')
             c = bytes([b[i] ^ self.miruro_key[i % 16] for i in range(len(b))])
             return base64.urlsafe_b64encode(c).decode('utf-8').rstrip('=')
-        return f"https://pro.ultracloud.cc/m3u8/?u={encode_param(url)}&r={encode_param(referer)}"
+        return f"https://ultracloud.cc{encode_param(url)}&r={encode_param(referer)}"
 
     def anikuro(self, url, referer):
         b64 = base64.b64encode(f"{url}|{referer}".encode()).decode()
         ext = ".m3u8" if ".m3u8" in url.lower() else ".mp4"
-        return f"https://proxy.anikuro.to/{b64}{ext}"
+        return f"https://anikuro.to{b64}{ext}"
 
     def lunaranime(self, url, referer):
-        return f"https://cluster.lunaranime.ru/api/proxy/hls/custom?url={quote(url, safe=':/')}&referer={quote(referer, safe=':/')}"
+        return f"https://lunaranime.ru{quote(url, safe=':/')}&referer={quote(referer, safe=':/')}"
 
     def animanga(self, url, referer):
         headers = json.dumps({"Referer": referer})
-        return f"https://upcloud.animanga.fun/proxy?url={quote(url, safe=':/')}&headers={quote(headers, safe=':/')}"
+        return f"https://animanga.fun{quote(url, safe=':/')}&headers={quote(headers, safe=':/')}"
 
 generator = ProxyGenerator()
 
@@ -65,8 +65,12 @@ def proxy_m3u8():
         with urllib.request.urlopen(req, timeout=10) as response:
             html_content = response.read().decode('utf-8')
             
-        # 🟢 FIXED: Safe string cutting extraction to prevent TypeError: can only concatenate list to list
-        base_url = url.rsplit('/', 1)[0] + '/' if '/' in url else url
+        # 🟢 FIXED: Bulletproof parent boundary extraction method using direct string indexing
+        if '/' in url:
+            base_url = url.rsplit('/', 1)[0] + '/'
+        else:
+            base_url = url + '/'
+            
         rewritten_lines = []
         
         for line in html_content.splitlines():
@@ -81,7 +85,7 @@ def proxy_m3u8():
                     rewritten_lines.append(f"/proxy_segment?{urlencode(params)}")
             elif 'URI="' in line:
                 try:
-                    # 🟢 FIXED: Bulletproof inline string token rebuilder for inline keys
+                    # 🟢 FIXED: Clean token extractor for string attributes
                     parts = line.split('URI="', 1)
                     before_uri = parts[0]
                     after_uri_parts = parts[1].split('"', 1)
