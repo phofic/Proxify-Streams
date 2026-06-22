@@ -28,19 +28,19 @@ class ProxyGenerator:
             b = text.encode('utf-8')
             c = bytes([b[i] ^ self.miruro_key[i % 16] for i in range(len(b))])
             return base64.urlsafe_b64encode(c).decode('utf-8').rstrip('=')
-        return f"https://ultracloud.cc{encode_param(url)}&r={encode_param(referer)}"
+        return f"https://pro.ultracloud.cc/m3u8/?u={encode_param(url)}&r={encode_param(referer)}"
 
     def anikuro(self, url, referer):
         b64 = base64.b64encode(f"{url}|{referer}".encode()).decode()
         ext = ".m3u8" if ".m3u8" in url.lower() else ".mp4"
-        return f"https://anikuro.to{b64}{ext}"
+        return f"https://proxy.anikuro.to/{b64}{ext}"
 
     def lunaranime(self, url, referer):
-        return f"https://lunaranime.ru{quote(url, safe=':/')}&referer={quote(referer, safe=':/')}"
+        return f"https://cluster.lunaranime.ru/api/proxy/hls/custom?url={quote(url, safe=':/')}&referer={quote(referer, safe=':/')}"
 
     def animanga(self, url, referer):
         headers = json.dumps({"Referer": referer})
-        return f"https://animanga.fun{quote(url, safe=':/')}&headers={quote(headers, safe=':/')}"
+        return f"https://upcloud.animanga.fun/proxy?url={quote(url, safe=':/')}&headers={quote(headers, safe=':/')}"
 
 generator = ProxyGenerator()
 
@@ -65,7 +65,7 @@ def proxy_m3u8():
         with urllib.request.urlopen(req, timeout=10) as response:
             html_content = response.read().decode('utf-8')
             
-        # 🟢 FIXED: Safe string extraction to get the parent folder path cleanly
+        # 🟢 FIXED: Safe string cutting extraction to prevent TypeError: can only concatenate list to list
         base_url = url.rsplit('/', 1)[0] + '/' if '/' in url else url
         rewritten_lines = []
         
@@ -81,7 +81,7 @@ def proxy_m3u8():
                     rewritten_lines.append(f"/proxy_segment?{urlencode(params)}")
             elif 'URI="' in line:
                 try:
-                    # 🟢 FIXED: Fully operational string token rebuilder for inline keys
+                    # 🟢 FIXED: Bulletproof inline string token rebuilder for inline keys
                     parts = line.split('URI="', 1)
                     before_uri = parts[0]
                     after_uri_parts = parts[1].split('"', 1)
@@ -123,7 +123,7 @@ def proxy_segment():
         if ".key" in url or "mon.key" in url:
             content_type = "application/pgp-keys"
         elif url.endswith(".jpg") or ".jpg" in url:
-            content_type = "video/mp2t" # Forces browser to process picture fragments as video byte arrays
+            content_type = "video/mp2t" 
             
         return Response(binary_content, mimetype=content_type, status=200)
     except Exception as e:
