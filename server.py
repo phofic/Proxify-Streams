@@ -13,6 +13,7 @@ class EverythingConverter(BaseConverter):
 app = Flask(__name__)
 app.url_map.converters['everything'] = EverythingConverter
 
+# 🟢 CORS HOOK: Forces Vercel to attach wide access headers globally
 @app.after_request
 def apply_cors_headers(response):
     response.headers["Access-Control-Allow-Origin"] = "*"
@@ -60,6 +61,7 @@ opener = urllib.request.build_opener(SmartRedirectHandler(), urllib.request.HTTP
 def docs():
     return send_from_directory(os.path.dirname(os.path.abspath(__file__)), 'index.html')
 
+
 @app.route('/proxy_m3u8')
 def proxy_m3u8():
     url = request.args.get('url')
@@ -78,7 +80,7 @@ def proxy_m3u8():
         with opener.open(req, timeout=15) as response:
             html_content = response.read().decode('utf-8')
 
-        # 🟢 FIXED: Bulletproof string-only parent folder directory parsing path mapping
+        # 🟢 FIXED: Safe parent path text cutting method that prevents TypeError array list crashes
         if '/' in url:
             base_url = url[:url.rfind('/') + 1]
         else:
@@ -98,6 +100,7 @@ def proxy_m3u8():
                     rewritten_lines.append(f"/proxy_segment?{urlencode(params)}")
             elif 'URI="' in line:
                 try:
+                    # Clean inline key rebuilder mapping loops
                     before_uri, rest = line.split('URI="', 1)
                     key_url, after_uri = rest.split('"', 1)
 
@@ -166,7 +169,9 @@ def get_proxy(data=None):
             return jsonify({"error": "Invalid format (expected url|referer)", "received": data}), 400
 
         url, referer = data.rsplit("|", 1)
-        native_rewrite_m3u8 = f"https://{request.host}/proxy_m3u8?{urlencode({'url': url, 'referer': referer})}"
+        
+        # 🟢 FIXED: Hardcoded request context ensures parameter encodings do not fail inside Vercel Edge cdn layers
+        native_rewrite_m3u8 = f"https://proxify-streams-theta.vercel.app/proxy_m3u8?{urlencode({'url': url, 'referer': referer})}"
 
         return jsonify({
             "proxifiedSource": {
