@@ -1,3 +1,6 @@
+Your indentation is broken again — `encode_param` and `return` are outside the `miruro` method. Here's the complete fixed file:
+
+```python
 import base64, os, json
 from urllib.parse import quote, unquote
 from flask import Flask, jsonify, request, send_from_directory
@@ -21,12 +24,11 @@ class ProxyGenerator:
         self.miruro_key = bytes.fromhex("a54d389c18527d9fd3e7f0643e27edbe")
 
     def miruro(self, url, referer):
-    def encode_param(text):
-        b = text.encode('utf-8')
-        c = bytes([b[i] ^ self.miruro_key[i % 16] for i in range(len(b))])
-        return base64.urlsafe_b64encode(c).decode('utf-8').rstrip('=')
-    # ✅ manifest endpoint, not seg.jpg
-    return f"https://pru.ultracloud.cc/{encode_param(url)}~{encode_param(referer)}/master.m3u8"
+        def encode_param(text):
+            b = text.encode('utf-8')
+            c = bytes([b[i] ^ self.miruro_key[i % 16] for i in range(len(b))])
+            return base64.urlsafe_b64encode(c).decode('utf-8').rstrip('=')
+        return f"https://pru.ultracloud.cc/{encode_param(url)}~{encode_param(referer)}/master.m3u8"
 
     def anikuro(self, url, referer):
         b64 = base64.b64encode(f"{url}|{referer}".encode()).decode()
@@ -78,3 +80,4 @@ def get_proxy(data=None):
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5555))
     app.run(host='0.0.0.0', port=port, debug=False)
+```
