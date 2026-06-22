@@ -4,6 +4,7 @@ import json
 from urllib.parse import quote, unquote, urljoin, urlencode
 import urllib.request
 import ssl
+import traceback  # 🟢 Added for advanced error debugging
 from flask import Flask, jsonify, request, send_from_directory, Response, make_response
 from werkzeug.routing import BaseConverter
 
@@ -13,7 +14,6 @@ class EverythingConverter(BaseConverter):
 app = Flask(__name__)
 app.url_map.converters['everything'] = EverythingConverter
 
-# 🟢 CORS HOOK: Forces Vercel to attach wide access headers globally
 @app.after_request
 def apply_cors_headers(response):
     response.headers["Access-Control-Allow-Origin"] = "*"
@@ -61,7 +61,6 @@ opener = urllib.request.build_opener(SmartRedirectHandler(), urllib.request.HTTP
 def docs():
     return send_from_directory(os.path.dirname(os.path.abspath(__file__)), 'index.html')
 
-
 @app.route('/proxy_m3u8')
 def proxy_m3u8():
     url = request.args.get('url')
@@ -69,18 +68,31 @@ def proxy_m3u8():
     if not url or not referer:
         return jsonify({"error": "Missing parameters"}), 400
 
+    # 🟢 FIXED: "Accept-Encoding": "identity" forces plain text and prevents hidden GZIP compression crashes
     spoof_headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Referer": referer,
-        "Origin": referer.rstrip('/')
+        "Origin": referer.rstrip('/'),
+        "Accept-Encoding": "identity",
+        "Accept": "*/*"
     }
 
     try:
         req = urllib.request.Request(url, headers=spoof_headers)
-        with opener.open(req, timeout=15) as response:
-            html_content = response.read().decode('utf-8')
+        with opener.open(req, timeout=12) as response:
+            # Handle upstream status safely before decoding
+            if response.status != 200:
+                return jsonify({"error": f"Upstream CDN returned status {response.status}", "url": url}), 502
+                
+            raw_data = response.read()
 
-        # 🟢 FIXED: Safe parent path text cutting method that prevents TypeError array list crashes
+        # 🟢 FIXED: Defensive multi-encoding decoder layer avoids UnicodeDecodeError crashes
+        try:
+            html_content = raw_data.decode('utf-8', errors='replace')
+        except Exception:
+            html_content = raw_data.decode('latin-1', errors='replace')
+
+        # Extract parent path directory
         if '/' in url:
             base_url = url[:url.rfind('/') + 1]
         else:
@@ -100,7 +112,6 @@ def proxy_m3u8():
                     rewritten_lines.append(f"/proxy_segment?{urlencode(params)}")
             elif 'URI="' in line:
                 try:
-                    # Clean inline key rebuilder mapping loops
                     before_uri, rest = line.split('URI="', 1)
                     key_url, after_uri = rest.split('"', 1)
 
@@ -114,8 +125,15 @@ def proxy_m3u8():
                 rewritten_lines.append(line)
 
         return Response("\n".join(rewritten_lines), mimetype="application/vnd.apple.mpegurl")
+        
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        # 🟢 FIXED: Logs the precise traceback to your Vercel Dashboard for fast diagnosis
+        print(f"[CRASH REPORT] Exception in proxy_m3u8: {str(e)}")
+        return jsonify({
+            "error": str(e),
+            "traceback": traceback.format_exc(),
+            "failed_target_url": url
+        }), 500
 
 
 @app.route('/proxy_segment')
@@ -128,7 +146,8 @@ def proxy_segment():
     spoof_headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Referer": referer,
-        "Origin": referer.rstrip('/')
+        "Origin": referer.rstrip('/'),
+        "Accept": "*/*"
     }
 
     try:
@@ -144,7 +163,7 @@ def proxy_segment():
 
         return Response(binary_content, mimetype=content_type, status=200)
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
 
 
 @app.route('/proxy/<everything:data>', methods=['GET', 'OPTIONS'])
@@ -169,8 +188,6 @@ def get_proxy(data=None):
             return jsonify({"error": "Invalid format (expected url|referer)", "received": data}), 400
 
         url, referer = data.rsplit("|", 1)
-        
-        # 🟢 FIXED: Hardcoded request context ensures parameter encodings do not fail inside Vercel Edge cdn layers
         native_rewrite_m3u8 = f"https://proxify-streams-theta.vercel.app/proxy_m3u8?{urlencode({'url': url, 'referer': referer})}"
 
         return jsonify({
