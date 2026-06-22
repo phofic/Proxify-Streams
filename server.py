@@ -81,17 +81,17 @@ def proxy_m3u8():
                     rewritten_lines.append(f"/proxy_segment?{urlencode(params)}")
             elif 'URI="' in line:
                 try:
-                    # 🟢 FIXED: Bulletproof inline string splitter logic
+                    # 🟢 FIXED: Fully operational string token rebuilder for inline keys
                     parts = line.split('URI="', 1)
                     before_uri = parts[0]
                     after_uri_parts = parts[1].split('"', 1)
                     key_url = after_uri_parts[0]
-                    after_uri = after_uri_parts[1] if len(after_uri_parts) > 1 else ''
+                    after_uri = '"' + after_uri_parts[1] if len(after_uri_parts) > 1 else ''
                     
                     abs_key_url = urljoin(base_url, key_url) if not key_url.startswith("http") else key_url
                     proxied_key = f"/proxy_segment?{urlencode({'url': abs_key_url, 'referer': referer})}"
                     
-                    rebuilt_line = f'{before_uri}URI="{proxied_key}"{after_uri}'
+                    rebuilt_line = f'{before_uri}URI="{proxied_key}{after_uri}'
                     rewritten_lines.append(rebuilt_line)
                 except Exception:
                     rewritten_lines.append(line)
@@ -123,7 +123,7 @@ def proxy_segment():
         if ".key" in url or "mon.key" in url:
             content_type = "application/pgp-keys"
         elif url.endswith(".jpg") or ".jpg" in url:
-            content_type = "video/mp2t"
+            content_type = "video/mp2t" # Forces browser to process picture fragments as video byte arrays
             
         return Response(binary_content, mimetype=content_type, status=200)
     except Exception as e:
