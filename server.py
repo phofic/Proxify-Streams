@@ -1,12 +1,24 @@
-import base64, os
-from flask import Flask, jsonify, request, send_from_directory
+import base64
+import os
+import json
+from urllib.parse import quote, unquote, urljoin, urlencode
+from flask import Flask, jsonify, request, send_from_directory, Response, make_response
 from werkzeug.routing import BaseConverter
+import requests
 
 class EverythingConverter(BaseConverter):
     regex = '.*'
 
 app = Flask(__name__)
 app.url_map.converters['everything'] = EverythingConverter
+
+# 🟢 GLOBAL CORS INJECTOR: Fixes the browser "Access-Control-Allow-Origin" error
+@app.after_request
+def apply_cors_headers(response):
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+    response.headers["Access-Control-Allow-Headers"] = "*"
+    return response
 
 class ProxyGenerator:
     def __init__(self):
@@ -25,12 +37,9 @@ class ProxyGenerator:
         return f"https://proxy.anikuro.to/{b64}{ext}"
 
     def lunaranime(self, url, referer):
-        from urllib.parse import quote
         return f"https://cluster.lunaranime.ru/api/proxy/hls/custom?url={quote(url, safe=':/')}&referer={quote(referer, safe=':/')}"
 
     def animanga(self, url, referer):
-        from urllib.parse import quote
-        import json
         headers = json.dumps({"Referer": referer})
         return f"https://upcloud.animanga.fun/proxy?url={quote(url, safe=':/')}&headers={quote(headers, safe=':/')}"
 
@@ -40,11 +49,86 @@ generator = ProxyGenerator()
 def docs():
     return send_from_directory(os.path.dirname(os.path.abspath(__file__)), 'index.html')
 
-@app.route('/proxy/<everything:data>')
-@app.route('/proxy')
-def get_proxy(data=None):
+# 🟢 NEW ENDPOINT: Native Master Playlist (.m3u8) Proxy & Line Rewriter
+@app.route('/proxy_m3u8')
+def proxy_m3u8():
+    url = request.args.get('url')
+    referer = request.args.get('referer')
+    if not url or not referer:
+        return jsonify({"error": "Missing parameters"}), 400
+        
+    spoof_headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Referer": referer,
+        "Origin": referer.rstrip('/')
+    }
     try:
-        from urllib.parse import unquote
+        res = requests.get(url, headers=spoof_headers, timeout=10)
+        if res.status_code != 200:
+            return Response("Failed to fetch manifest", status=res.status_code)
+            
+        base_url = url.rsplit('/', 1)[0] + '/'
+        rewritten_lines = []
+        
+        for line in res.text.splitlines():
+            clean_line = line.strip()
+            if clean_line and not clean_line.startswith("#"):
+                abs_url = urljoin(base_url, clean_line) if not clean_line.startswith("http") else clean_line
+                params = {"url": abs_url, "referer": referer}
+                
+                if '.m3u8' in clean_line:
+                    rewritten_lines.append(f"/proxy_m3u8?{urlencode(params)}")
+                else:
+                    rewritten_lines.append(f"/proxy_segment?{urlencode(params)}")
+            elif 'URI="' in line:
+                try:
+                    parts = line.split('URI="')
+                    key_url = parts[1].split('"')[0]
+                    abs_key_url = urljoin(base_url, key_url) if not key_url.startswith("http") else key_url
+                    proxied_key = f"/proxy_segment?{urlencode({'url': abs_key_url, 'referer': referer})}"
+                    rewritten_lines.append(parts[0] + 'URI="' + proxied_key + '"' + parts[1].split('"', 1)[1])
+                except Exception:
+                    rewritten_lines.append(line)
+            else:
+                rewritten_lines.append(line)
+                
+        return Response("\n".join(rewritten_lines), mimetype="application/vnd.apple.mpegurl")
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+# 🟢 NEW ENDPOINT: Native Binary Video Segment (.ts / .jpg / .key) Streamer
+@app.route('/proxy_segment')
+def proxy_segment():
+    url = request.args.get('url')
+    referer = request.args.get('referer')
+    if not url or not referer:
+        return jsonify({"error": "Missing parameters"}), 400
+        
+    spoof_headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Referer": referer,
+        "Origin": referer.rstrip('/')
+    }
+    try:
+        res = requests.get(url, headers=spoof_headers, timeout=30)
+        
+        content_type = "video/mp2t"
+        if ".key" in url or "mon.key" in url:
+            content_type = "application/pgp-keys"
+        elif url.endswith(".jpg") or ".jpg" in url:
+            content_type = "video/mp2t" # Force obfuscated images to read as video byte data
+            
+        return Response(res.content, mimetype=content_type, status=200)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/proxy/<everything:data>', methods=['GET', 'OPTIONS'])
+@app.route('/proxy', methods=['GET', 'OPTIONS'])
+def get_proxy(data=None):
+    if request.method == 'OPTIONS':
+        return make_response('', 200)
+        
+    try:
         if not data:
             data = request.args.get('data')
         if not data:
@@ -62,9 +146,12 @@ def get_proxy(data=None):
 
         url, referer = data.rsplit("|", 1)
 
+        # 🟢 UPGRADE: If miruro encryption falls flat on specialized tracks, route natively into our rewriter!
+        native_rewrite_m3u8 = f"https://{request.host}/proxy_m3u8?{urlencode({'url': url, 'referer': referer})}"
+
         return jsonify({
             "proxifiedSource": {
-                "miruro": generator.miruro(url, referer),
+                "miruro": native_rewrite_m3u8, # Dynamically hands our internal fallback rewrites directly to your player
                 "anikuro": generator.anikuro(url, referer),
                 "lunaranime": generator.lunaranime(url, referer),
                 "animanga": generator.animanga(url, referer)
@@ -77,5 +164,4 @@ if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5555))
     app.run(host='0.0.0.0', port=port, debug=False)
 
-# Vercel deployment
 app = app
