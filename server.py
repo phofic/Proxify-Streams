@@ -1,6 +1,3 @@
-Your indentation is broken again — `encode_param` and `return` are outside the `miruro` method. Here's the complete fixed file:
-
-```python
 import base64, os, json
 from urllib.parse import quote, unquote
 from flask import Flask, jsonify, request, send_from_directory
@@ -80,4 +77,6 @@ def get_proxy(data=None):
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5555))
     app.run(host='0.0.0.0', port=port, debug=False)
-```
+
+# ✅ Required for Vercel to find the WSGI entrypoint
+application = app
