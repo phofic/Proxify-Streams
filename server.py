@@ -65,8 +65,8 @@ def proxy_m3u8():
         with urllib.request.urlopen(req, timeout=10) as response:
             html_content = response.read().decode('utf-8')
             
-        # 🟢 FIXED: Safe string cutting extraction to get the parent folder path safely
-        base_url = url.rsplit('/', 1)[0] + '/'
+        # 🟢 FIXED: Safe string extraction to get the parent folder path cleanly
+        base_url = url.rsplit('/', 1)[0] + '/' if '/' in url else url
         rewritten_lines = []
         
         for line in html_content.splitlines():
@@ -81,11 +81,18 @@ def proxy_m3u8():
                     rewritten_lines.append(f"/proxy_segment?{urlencode(params)}")
             elif 'URI="' in line:
                 try:
-                    parts = line.split('URI="')
-                    key_url = parts[1].split('"')[0]
+                    # 🟢 FIXED: Bulletproof inline string splitter logic
+                    parts = line.split('URI="', 1)
+                    before_uri = parts[0]
+                    after_uri_parts = parts[1].split('"', 1)
+                    key_url = after_uri_parts[0]
+                    after_uri = after_uri_parts[1] if len(after_uri_parts) > 1 else ''
+                    
                     abs_key_url = urljoin(base_url, key_url) if not key_url.startswith("http") else key_url
                     proxied_key = f"/proxy_segment?{urlencode({'url': abs_key_url, 'referer': referer})}"
-                    rewritten_lines.append(parts[0] + 'URI="' + proxied_key + '"' + parts[1].split(' Rhine ', 1)[-1].split('"', 1)[-1] if '"' not in parts[1].split('"', 1)[0] else parts[0] + 'URI="' + proxied_key + '"' + parts[1].split('"', 1)[1])
+                    
+                    rebuilt_line = f'{before_uri}URI="{proxied_key}"{after_uri}'
+                    rewritten_lines.append(rebuilt_line)
                 except Exception:
                     rewritten_lines.append(line)
             else:
