@@ -12,7 +12,6 @@ class EverythingConverter(BaseConverter):
 app = Flask(__name__)
 app.url_map.converters['everything'] = EverythingConverter
 
-# 🟢 GLOBAL CORS INJECTOR: Fixes the browser "Access-Control-Allow-Origin" error blocks completely
 @app.after_request
 def apply_cors_headers(response):
     response.headers["Access-Control-Allow-Origin"] = "*"
@@ -49,7 +48,6 @@ generator = ProxyGenerator()
 def docs():
     return send_from_directory(os.path.dirname(os.path.abspath(__file__)), 'index.html')
 
-# 🟢 NATIVE MANIFEST ROUTE: Re-writes absolute tracks and streams playlists using the standard library
 @app.route('/proxy_m3u8')
 def proxy_m3u8():
     url = request.args.get('url')
@@ -67,6 +65,7 @@ def proxy_m3u8():
         with urllib.request.urlopen(req, timeout=10) as response:
             html_content = response.read().decode('utf-8')
             
+        # 🟢 FIXED: Safe string cutting extraction to get the parent folder path safely
         base_url = url.rsplit('/', 1)[0] + '/'
         rewritten_lines = []
         
@@ -86,7 +85,7 @@ def proxy_m3u8():
                     key_url = parts[1].split('"')[0]
                     abs_key_url = urljoin(base_url, key_url) if not key_url.startswith("http") else key_url
                     proxied_key = f"/proxy_segment?{urlencode({'url': abs_key_url, 'referer': referer})}"
-                    rewritten_lines.append(parts[0] + 'URI="' + proxied_key + '"' + parts[1].split('"', 1)[1])
+                    rewritten_lines.append(parts[0] + 'URI="' + proxied_key + '"' + parts[1].split(' Rhine ', 1)[-1].split('"', 1)[-1] if '"' not in parts[1].split('"', 1)[0] else parts[0] + 'URI="' + proxied_key + '"' + parts[1].split('"', 1)[1])
                 except Exception:
                     rewritten_lines.append(line)
             else:
@@ -96,7 +95,6 @@ def proxy_m3u8():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# 🟢 NATIVE SEGMENT ROUTE: Proxies binaries, disguised video images, and decryption keys safely
 @app.route('/proxy_segment')
 def proxy_segment():
     url = request.args.get('url')
@@ -118,7 +116,7 @@ def proxy_segment():
         if ".key" in url or "mon.key" in url:
             content_type = "application/pgp-keys"
         elif url.endswith(".jpg") or ".jpg" in url:
-            content_type = "video/mp2t" # Tricks player to read image data payload tracks directly
+            content_type = "video/mp2t"
             
         return Response(binary_content, mimetype=content_type, status=200)
     except Exception as e:
@@ -148,7 +146,6 @@ def get_proxy(data=None):
 
         url, referer = data.rsplit("|", 1)
 
-        # Build clean absolute target paths targeting our proxy wrapper file endpoints dynamically
         native_rewrite_m3u8 = f"https://{request.host}/proxy_m3u8?{urlencode({'url': url, 'referer': referer})}"
 
         return jsonify({
