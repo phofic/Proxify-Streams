@@ -1,7 +1,11 @@
-import base64, os, json, requests, re
+import base64
+import os
+import json
+import re
 from urllib.parse import quote, unquote
 from flask import Flask, jsonify, request, send_from_directory, Response
 from werkzeug.routing import BaseConverter
+import requests
 
 class EverythingConverter(BaseConverter):
     regex = '.*'
@@ -29,7 +33,6 @@ class ProxyGenerator:
 
     def miruro_transcoded(self, url, referer):
         """Returns a transcoded stream URL via our proxy"""
-        # We'll use the transcoding endpoint with the miruro URL
         original_url = self.miruro(url, referer)
         return f"/transcode_miruro?url={quote(original_url, safe=':/')}"
 
@@ -49,26 +52,25 @@ generator = ProxyGenerator()
 
 @app.route('/')
 def docs():
-    return send_from_directory(os.path.dirname(os.path.abspath(__file__)), 'index.html')
+    try:
+        return send_from_directory(os.path.dirname(os.path.abspath(__file__)), 'index.html')
+    except:
+        return jsonify({"message": "Proxy server is running"})
 
 @app.route('/transcode_miruro', methods=['GET'])
 def transcode_miruro():
-    """
-    Fetches the Miruro master manifest and modifies it to:
-    1. Find the best quality video stream
-    2. Remove audio-only variants
-    3. Keep only video+audio variants with compatible codecs
-    """
+    """Fetches the Miruro manifest and filters problematic audio codecs"""
     try:
         url = request.args.get('url')
         if not url:
             return jsonify({"error": "No URL provided"}), 400
         
-        # Fetch the master manifest
+        # Fetch the manifest
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
             'Referer': 'https://kwik.cx/'
         }
+        
         response = requests.get(url, headers=headers, timeout=30)
         response.raise_for_status()
         
@@ -78,12 +80,12 @@ def transcode_miruro():
         if '#EXT-X-STREAM-INF' in manifest:
             lines = manifest.split('\n')
             new_lines = []
+            i = 0
             
-            # Find all variant streams
-            variant_urls = []
-            for i, line in enumerate(lines):
+            while i < len(lines):
+                line = lines[i].strip()
                 if '#EXT-X-STREAM-INF' in line:
-                    # Check if it's a video stream (has RESOLUTION or CODECS with video codec)
+                    # Check if this is a video variant (has RESOLUTION or avc codec)
                     has_video = 'RESOLUTION' in line or ('CODECS' in line and 'avc' in line.lower())
                     if has_video:
                         # Keep this variant
@@ -97,18 +99,24 @@ def transcode_miruro():
                                     base_url = url.rsplit('/', 1)[0]
                                     url_line = f"{base_url}/{url_line}"
                                 new_lines.append(url_line)
+                    i += 2
+                else:
+                    new_lines.append(line)
+                    i += 1
             
-            # If we found video variants, serve the modified manifest
+            # If we found video variants, serve the filtered manifest
             if new_lines:
-                modified_manifest = '\n'.join(new_lines)
-                # Add required headers
-                modified_manifest = '#EXTM3U\n' + modified_manifest
-                return Response(modified_manifest, mimetype='application/vnd.apple.mpegurl')
-            
-            # If no video variants found, use the original manifest
-            return Response(manifest, mimetype='application/vnd.apple.mpegurl')
+                # Keep only EXT-X-STREAM-INF lines and their URLs
+                filtered_lines = []
+                for line in new_lines:
+                    if '#EXT-X-STREAM-INF' in line or (not line.startswith('#') and line):
+                        filtered_lines.append(line)
+                
+                if filtered_lines:
+                    modified_manifest = '#EXTM3U\n' + '\n'.join(filtered_lines)
+                    return Response(modified_manifest, mimetype='application/vnd.apple.mpegurl')
         
-        # If it's a direct manifest (not master), just pass through
+        # If no video variants found or direct manifest, just pass through
         return Response(manifest, mimetype='application/vnd.apple.mpegurl')
     
     except Exception as e:
@@ -134,7 +142,6 @@ def get_proxy(data=None):
         url, referer = data.rsplit("|", 1)
         
         # Return both the original Miruro URL and the transcoded URL
-        # The transcoded URL will filter out problematic audio codecs
         return jsonify({
             "proxifiedSource": {
                 "miruro": generator.miruro(url, referer),
@@ -151,5 +158,5 @@ if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5555))
     app.run(host='0.0.0.0', port=port, debug=False)
 
-# ✅ Required for Vercel to find the WSGI entrypoint
+# Required for Vercel
 application = app
