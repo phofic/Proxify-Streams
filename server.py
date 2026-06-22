@@ -21,12 +21,13 @@ class ProxyGenerator:
     def __init__(self):
         self.miruro_key = bytes.fromhex("a54d389c18527d9fd3e7f0643e27edbe")
 
-    def miruro(self, url, referer):
-        def encode_param(text):
-            b = text.encode('utf-8')
-            c = bytes([b[i] ^ self.miruro_key[i % 16] for i in range(len(b))])
-            return base64.urlsafe_b64encode(c).decode('utf-8').rstrip('=')
-        return f"https://pro.ultracloud.cc/m3u8/?u={encode_param(url)}&r={encode_param(referer)}"
+   def miruro(self, url, referer):
+    def encode_param(text):
+        b = text.encode('utf-8')
+        c = bytes([b[i] ^ self.miruro_key[i % 16] for i in range(len(b))])
+        return base64.urlsafe_b64encode(c).decode('utf-8').rstrip('=')
+    # ✅ pru not pro, path format not query params, ~ separator
+    return f"https://pru.ultracloud.cc/{encode_param(url)}~{encode_param(referer)}/seg.jpg"
 
     def anikuro(self, url, referer):
         b64 = base64.b64encode(f"{url}|{referer}".encode()).decode()
