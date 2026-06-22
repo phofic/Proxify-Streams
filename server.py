@@ -2,9 +2,9 @@ import base64
 import os
 import json
 from urllib.parse import quote, unquote, urljoin, urlencode
+import urllib.request
 from flask import Flask, jsonify, request, send_from_directory, Response, make_response
 from werkzeug.routing import BaseConverter
-import requests
 
 class EverythingConverter(BaseConverter):
     regex = '.*'
@@ -12,12 +12,12 @@ class EverythingConverter(BaseConverter):
 app = Flask(__name__)
 app.url_map.converters['everything'] = EverythingConverter
 
-# 🟢 GLOBAL CORS INJECTOR: Fixes the browser "Access-Control-Allow-Origin" error
+# 🟢 GLOBAL CORS INJECTOR: Fixes the browser "Access-Control-Allow-Origin" error blocks completely
 @app.after_request
 def apply_cors_headers(response):
     response.headers["Access-Control-Allow-Origin"] = "*"
     response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
-    response.headers["Access-Control-Allow-Headers"] = "*"
+    response.headers["Access-Control-Allow-Headers"] = "X-Requested-With, Content-Type, Accept, Range"
     return response
 
 class ProxyGenerator:
@@ -29,19 +29,19 @@ class ProxyGenerator:
             b = text.encode('utf-8')
             c = bytes([b[i] ^ self.miruro_key[i % 16] for i in range(len(b))])
             return base64.urlsafe_b64encode(c).decode('utf-8').rstrip('=')
-        return f"https://pro.ultracloud.cc/m3u8/?u={encode_param(url)}&r={encode_param(referer)}"
+        return f"https://ultracloud.cc{encode_param(url)}&r={encode_param(referer)}"
 
     def anikuro(self, url, referer):
         b64 = base64.b64encode(f"{url}|{referer}".encode()).decode()
         ext = ".m3u8" if ".m3u8" in url.lower() else ".mp4"
-        return f"https://proxy.anikuro.to/{b64}{ext}"
+        return f"https://anikuro.to{b64}{ext}"
 
     def lunaranime(self, url, referer):
-        return f"https://cluster.lunaranime.ru/api/proxy/hls/custom?url={quote(url, safe=':/')}&referer={quote(referer, safe=':/')}"
+        return f"https://lunaranime.ru{quote(url, safe=':/')}&referer={quote(referer, safe=':/')}"
 
     def animanga(self, url, referer):
         headers = json.dumps({"Referer": referer})
-        return f"https://upcloud.animanga.fun/proxy?url={quote(url, safe=':/')}&headers={quote(headers, safe=':/')}"
+        return f"https://animanga.fun{quote(url, safe=':/')}&headers={quote(headers, safe=':/')}"
 
 generator = ProxyGenerator()
 
@@ -49,7 +49,7 @@ generator = ProxyGenerator()
 def docs():
     return send_from_directory(os.path.dirname(os.path.abspath(__file__)), 'index.html')
 
-# 🟢 NEW ENDPOINT: Native Master Playlist (.m3u8) Proxy & Line Rewriter
+# 🟢 NATIVE MANIFEST ROUTE: Re-writes absolute tracks and streams playlists using the standard library
 @app.route('/proxy_m3u8')
 def proxy_m3u8():
     url = request.args.get('url')
@@ -63,14 +63,14 @@ def proxy_m3u8():
         "Origin": referer.rstrip('/')
     }
     try:
-        res = requests.get(url, headers=spoof_headers, timeout=10)
-        if res.status_code != 200:
-            return Response("Failed to fetch manifest", status=res.status_code)
+        req = urllib.request.Request(url, headers=spoof_headers)
+        with urllib.request.urlopen(req, timeout=10) as response:
+            html_content = response.read().decode('utf-8')
             
         base_url = url.rsplit('/', 1)[0] + '/'
         rewritten_lines = []
         
-        for line in res.text.splitlines():
+        for line in html_content.splitlines():
             clean_line = line.strip()
             if clean_line and not clean_line.startswith("#"):
                 abs_url = urljoin(base_url, clean_line) if not clean_line.startswith("http") else clean_line
@@ -96,7 +96,7 @@ def proxy_m3u8():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# 🟢 NEW ENDPOINT: Native Binary Video Segment (.ts / .jpg / .key) Streamer
+# 🟢 NATIVE SEGMENT ROUTE: Proxies binaries, disguised video images, and decryption keys safely
 @app.route('/proxy_segment')
 def proxy_segment():
     url = request.args.get('url')
@@ -110,15 +110,17 @@ def proxy_segment():
         "Origin": referer.rstrip('/')
     }
     try:
-        res = requests.get(url, headers=spoof_headers, timeout=30)
+        req = urllib.request.Request(url, headers=spoof_headers)
+        with urllib.request.urlopen(req, timeout=30) as response:
+            binary_content = response.read()
         
         content_type = "video/mp2t"
         if ".key" in url or "mon.key" in url:
             content_type = "application/pgp-keys"
         elif url.endswith(".jpg") or ".jpg" in url:
-            content_type = "video/mp2t" # Force obfuscated images to read as video byte data
+            content_type = "video/mp2t" # Tricks player to read image data payload tracks directly
             
-        return Response(res.content, mimetype=content_type, status=200)
+        return Response(binary_content, mimetype=content_type, status=200)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -146,12 +148,12 @@ def get_proxy(data=None):
 
         url, referer = data.rsplit("|", 1)
 
-        # 🟢 UPGRADE: If miruro encryption falls flat on specialized tracks, route natively into our rewriter!
+        # Build clean absolute target paths targeting our proxy wrapper file endpoints dynamically
         native_rewrite_m3u8 = f"https://{request.host}/proxy_m3u8?{urlencode({'url': url, 'referer': referer})}"
 
         return jsonify({
             "proxifiedSource": {
-                "miruro": native_rewrite_m3u8, # Dynamically hands our internal fallback rewrites directly to your player
+                "miruro": native_rewrite_m3u8, 
                 "anikuro": generator.anikuro(url, referer),
                 "lunaranime": generator.lunaranime(url, referer),
                 "animanga": generator.animanga(url, referer)
