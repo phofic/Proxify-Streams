@@ -1,6 +1,7 @@
 import base64
 import os
 import json
+import requests
 from urllib.parse import quote, unquote
 from flask import Flask, jsonify, request
 from werkzeug.routing import BaseConverter
@@ -8,7 +9,6 @@ from werkzeug.routing import BaseConverter
 class EverythingConverter(BaseConverter):
     regex = '.*'
 
-# 🟢 Vercel looks for this exact top-level variable name 'app'
 app = Flask(__name__)
 app.url_map.converters['everything'] = EverythingConverter
 
@@ -31,10 +31,24 @@ class ProxyGenerator:
         return f"https://pru.ultracloud.cc/{encode_param(url)}~{encode_param(referer)}/master.m3u8"
 
     def anikuro(self, url, referer):
-        # 🟢 FIXED: Swapped out the dead .to domain path for the functional .ru layout
+        # 🔥 FIX: Parse the URL to extract anime ID and episode
+        # URL format: https://vault-10.uwucdn.top/stream/10/02/{hash}/uwu.m3u8
+        # or https://megaplay.buzz/{animeId}/{episodeNumber}/dub
+        
+        # Try to extract anime ID and episode from the URL
+        if 'megaplay.buzz' in url:
+            parts = url.split('/')
+            # https://megaplay.buzz/{animeId}/{episodeNumber}/dub
+            if len(parts) >= 6:
+                anime_id = parts[3]  # Get anime ID
+                episode = parts[4]   # Get episode number
+                return f"https://anikuro.ru/api/v1/sources/allanime/{anime_id}:{episode}"
+        
+        # Fallback: try to extract from vault URL
+        # The vault URL might contain the anime info, but it's hashed
+        # Try using the old base64 method as fallback
         b64 = base64.b64encode(f"{url}|{referer}".encode()).decode()
-        ext = ".m3u8" if ".m3u8" in url.lower() else ".mp4"
-        return f"https://anikuro.ru/{b64}{ext}"
+        return f"https://anikuro.ru/{b64}.m3u8"
 
     def lunaranime(self, url, referer):
         return f"https://cluster.lunaranime.ru/api/proxy/hls/custom?url={quote(url, safe=':/')}&referer={quote(referer, safe=':/')}"
@@ -44,6 +58,45 @@ class ProxyGenerator:
         return f"https://upcloud.animanga.fun/proxy?url={quote(url, safe=':/')}&headers={quote(headers, safe=':/')}"
 
 generator = ProxyGenerator()
+
+# 🔥 NEW: Add endpoint to fetch from Anikuro API
+@app.route('/anikuro_source', methods=['GET'])
+def get_anikuro_source():
+    try:
+        anime_id = request.args.get('anime_id')
+        episode = request.args.get('episode')
+        
+        if not anime_id or not episode:
+            return jsonify({"error": "Missing anime_id or episode"}), 400
+        
+        # Fetch from Anikuro API
+        api_url = f"https://anikuro.ru/api/v1/sources/allanime/{anime_id}:{episode}"
+        response = requests.get(api_url, headers={
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Referer': 'https://anikuro.ru/',
+        })
+        response.raise_for_status()
+        
+        data = response.json()
+        
+        # Extract the stream URL from the response
+        # The response should contain a sources array or similar
+        if 'sources' in data and len(data['sources']) > 0:
+            stream_url = data['sources'][0].get('url') or data['sources'][0].get('file')
+            return jsonify({
+                "success": True,
+                "stream_url": stream_url,
+                "data": data
+            })
+        else:
+            return jsonify({
+                "success": False,
+                "error": "No stream found",
+                "data": data
+            })
+            
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 @app.route('/')
 def docs():
@@ -67,6 +120,7 @@ def get_proxy(data=None):
         if "|" not in data:
             return jsonify({"error": "Invalid format (expected url|referer)", "received": data}), 400
         url, referer = data.rsplit("|", 1)
+        
         return jsonify({
             "proxifiedSource": {
                 "miruro": generator.miruro(url, referer),
@@ -82,5 +136,5 @@ if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5555))
     app.run(host='0.0.0.0', port=port, debug=False)
 
-# ✅ Double entrypoint fallback wrapper mapping target definition logic
+# Required for Vercel
 application = app
